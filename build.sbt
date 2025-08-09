@@ -61,6 +61,16 @@ lazy val fibonacci = crossProject(JVMPlatform)
   )
   .dependsOn(root)
 
+lazy val repeat = crossProject(JVMPlatform)
+  .in(file("durable-example"))
+  .settings(
+    name := "durable-example-repeat",
+    commonSettings,
+    Compile / mainClass := Some("durable.example.Repeat"),
+    target := baseDirectory.value / "target" / "repeat",
+  )
+  .dependsOn(root)
+
 lazy val count = crossProject(JVMPlatform, JSPlatform, NativePlatform)
   .in(file("durable-example"))
   .settings(

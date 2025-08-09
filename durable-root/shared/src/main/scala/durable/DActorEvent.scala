@@ -18,4 +18,9 @@ private[durable] case class DActorCreate[T](
 private[durable] case class DActorLog(
     timestamp: Long,
     message: String,
-) // Does not extend DActorEvent as it is not enqueued in mailbox
+) extends DActorEvent
+
+private[durable] case class DActorDelaySend(
+    until: Long,
+    sendEvent: DActorSend[?],
+) extends DActorEvent

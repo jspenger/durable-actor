@@ -44,28 +44,36 @@ object DActorBehaviors extends DActorBehaviorsJVM {
   ) extends DActorBehavior[T]
 
   private[durable] case object SameBehavior extends DActorBehavior[Any] {
-    override final def isOptimistic: Boolean = false
+    override final def isOptimistic: Boolean = ???
   }
 
   private[durable] case object StoppedBehavior extends DActorBehavior[Any] {
-    override final def isOptimistic: Boolean = false
+    override final def isOptimistic: Boolean = ???
+  }
+
+  extension [T](thiz: DActorBehavior[T]) {
+    def copy(isOptimistic: Boolean = thiz.isOptimistic): DActorBehavior[T] = thiz match {
+      case b @ ReceiveBehavior(_, _) => b.copy(isOptimistic = isOptimistic)
+      case b @ InitBehavior(_, _)    => b.copy(isOptimistic = isOptimistic)
+      case _                         => thiz
+    }
   }
 
   sealed trait Annotation
+
+  /** If the results of executing this actor can be executed before
+    * checkpointed.
+    *
+    * This behavior flag is only relevant during the `spawn` operation. Once
+    * spawned, it will remain the same. Any further calls to change the flag
+    * will not have any effect.
+    */
   case object Optimistic extends Annotation
 
   extension [T](behavior: DActorBehavior[T]) {
     def withAnnotation(annotation: Annotation): DActorBehavior[T] =
       annotation match
         case Optimistic =>
-          behavior match
-            case ReceiveBehavior(fun, _) =>
-              ReceiveBehavior(fun, true)
-            case InitBehavior(fun, _) =>
-              InitBehavior(fun, true)
-            case SameBehavior =>
-              SameBehavior
-            case StoppedBehavior =>
-              StoppedBehavior
+          behavior.copy(isOptimistic = true)
   }
 }

@@ -5,39 +5,58 @@ import upickle.default.*
 import spores.default.*
 
 import durable.DActorBehaviors.*
+import scala.collection.mutable.ArrayBuffer
 
-private[durable] class DActorRuntimeImpl(
-    config: DActorConfig
-) extends DActorRuntime {
-
-  private var dState = DState.empty()
+private[durable] class DActorRuntimeImpl(config: DActorConfig) extends DActorRuntime {
+  private var state = DState.empty()
 
   Logger.setRootLevel(config.get("--log-level").getOrElse(Logger.Level.DEBUG))
   private val logger = Logger("Durable Actor Runtime")
   private val appLogger = Logger(config.get("--app-name").getOrElse("DActor App"))
+
+  private class ActorEventBuffer {
+    private val buffer = ArrayBuffer.empty[DActorEvent]
+
+    def append(event: DActorEvent): Unit =
+      buffer.append(event)
+
+    def flush(fastTrack: Boolean): Unit =
+      if fastTrack then //
+        state.dFastQueue.appendAll(buffer)
+      else //
+        state.dSlowQueue.appendAll(buffer)
+
+    def clear(): Unit =
+      buffer.clear()
+  }
+  private val actorEventBuffer = new ActorEventBuffer()
 
   override def schedule[T](fileName: String)(behavior: DActorBehavior[T]): Unit = {
     logger.info("\n" + DURABLE)
     logger.info("Starting Durable Actor runtime")
 
     if config.get("--force-restart").contains(true) then {
-      // Clear existing checkpoint file if config --force-restart
+      // Clear existing checkpoint file if config `--force-restart=true`
       logger.info(s"Configured to `--force-restart`. Clearing any existing checkpoint at file: $fileName.")
       DFile.clear(fileName)
 
       // And spawn the initial behavior
-      actorSpawn(behavior, false)
-      DFile.checkpoint(fileName, this.dState)
+      this.actorSpawn(behavior)
+      this.actorEventBuffer.flush(behavior.isOptimistic)
+      this.actorEventBuffer.clear()
+      DFile.checkpoint(fileName, this.state)
 
     } else {
       // Restore from existing checkpoint file, throws exception if something goes wrong
       val restored = DFile.restore[DState](fileName)
       if (restored.isDefined) then {
-        dState = restored.get
+        this.state = restored.get
       } else {
         // If checkpoint file is missing, spawn initial behavior
-        actorSpawn(behavior, false)
-        DFile.checkpoint(fileName, this.dState)
+        this.actorSpawn(behavior)
+        this.actorEventBuffer.flush(behavior.isOptimistic)
+        this.actorEventBuffer.clear()
+        DFile.checkpoint(fileName, this.state)
       }
     }
 
@@ -45,47 +64,42 @@ private[durable] class DActorRuntimeImpl(
     this.run(fileName, behavior)
   }
 
-  private def enqueueEvent[T](event: DActorEvent, fastTrack: Boolean): Unit = {
-    if fastTrack then {
-      this.dState.dFastQueue.enqueue(event)
-    } else {
-      this.dState.dSlowQueue.enqueue(event)
-    }
-  }
-
-  override def actorSend[U](aref: DActorRef[U], msg: U, fastTrack: Boolean)(using Spore[ReadWriter[U]]): Unit = {
+  override def actorSend[U](aref: DActorRef[U], msg: U)(using Spore[ReadWriter[U]]): Unit = {
     val event = DActorSend(aref, Env(msg))
-    enqueueEvent(event, fastTrack)
+    this.actorEventBuffer.append(event)
   }
 
-  override def actorSpawn[U](behavior: DActorBehavior[U], fastTrack: Boolean): DActorRef[U] = {
-    val aref = DActorRef.fresh[U]()
+  override def actorSpawn[U](behavior: DActorBehavior[U]): DActorRef[U] = {
+    val aref = DActorRef.fresh[U](behavior.isOptimistic)
     val event = DActorCreate(aref, behavior)
-    enqueueEvent(event, fastTrack)
+    this.actorEventBuffer.append(event)
     aref
   }
 
   override def actorLog(msg: String): Unit = {
     appLogger.info(msg)
-    val entry = DActorLog(System.currentTimeMillis(), msg)
-    this.dState.dLog.append(entry)
+    val event = DActorLog(System.currentTimeMillis(), msg)
+    this.actorEventBuffer.append(event)
   }
 
-  private def initializeBehavior[T](behavior: DActorBehavior[T], dCtx: DActorContextImpl): DActorBehavior[T] = {
-    def rec(behavior: DActorBehavior[T], dCtx: DActorContextImpl): DActorBehavior[T] = {
+  override def actorDelaySend[U](delay: Long, aref: DActorRef[U], msg: U)(using Spore[ReadWriter[U]]): Unit = {
+    val event = DActorDelaySend(System.currentTimeMillis() + delay, DActorSend(aref, Env(msg)))
+    this.actorEventBuffer.append(event)
+  }
+
+  private def initializeBehavior[T](behavior: DActorBehavior[T], ctx: DActorContextImpl): DActorBehavior[T] = {
+    def rec(behavior: DActorBehavior[T], ctx: DActorContextImpl): DActorBehavior[T] = {
       behavior match
         case InitBehavior(initFactory, _) =>
-          initializeBehavior(initFactory.unwrap().apply(using dCtx.asInstanceOf), dCtx)
+          initializeBehavior(initFactory.unwrap().apply(using ctx.asInstanceOf), ctx)
 
         case _ =>
           behavior
     }
 
-    val initialized = rec(behavior, dCtx)
+    val initialized = rec(behavior, ctx)
 
-    if (initialized eq InitBehavior) {
-      throw new Exception("Cannot return InitBehavior from InitBehavior")
-    }
+    // The `rec`usive call never returns an InitBehavior so we don't need to check for it
     if (initialized eq SameBehavior) {
       throw new Exception("Cannot return SameBehavior from InitBehavior")
     }
@@ -93,55 +107,42 @@ private[durable] class DActorRuntimeImpl(
     initialized
   }
 
-  private def handleUpdateBehaviorMap(aref: DActorRef[Any], behavior: DActorBehavior[Any], dCtx: DActorContextImpl): Unit = {
-    behavior match {
-
-      // ReceiveBehavior replaces the existing behavior
-      case b @ ReceiveBehavior(_, _) =>
-        this.dState.dMap.put(aref, b)
-
-      // Stopped behaviors are discarded
-      case b @ StoppedBehavior =>
-        this.dState.dMap.remove(aref)
-
-      // SameBehavior does nothing
-      case SameBehavior => ()
-
-      // InitBehavior
-      case b @ InitBehavior(_, _) =>
-        // The returned `initialized` behavior is guaranteed to not be a
-        // InitBehavior, so this cannot cause an infinite recursion
-        val initialized = initializeBehavior(b, dCtx)
-
-        this.handleUpdateBehaviorMap(aref, initialized, dCtx)
-    }
+  private def updateBehaviorMap(aref: DActorRef[Any], behavior: DActorBehavior[Any]): Unit = {
+    behavior match
+      case b @ ReceiveBehavior(_, _) => this.state.dMap.put(aref, b) // replace existing behavior
+      case b @ StoppedBehavior       => this.state.dMap.remove(aref) // remove stopped behavior
+      case SameBehavior              => () // do nothing
+      case InitBehavior(_, _)        => ??? // cannot happen, here for completeness check
   }
 
-  private def handleDActorCreateEvent(aref: DActorRef[Any], behavior: DActorBehavior[Any], dCtx: DActorContextImpl): Unit = {
-    dCtx._self = aref.asInstanceOf[DActorRef[Any]]
-    dCtx._optimistic = behavior.isOptimistic
-
-    this.handleUpdateBehaviorMap(aref, behavior, dCtx)
+  private def handleActorSpawn(event: DActorCreate[Any], ctx: DActorContextImpl): Unit = {
+    ctx._self = event.aref
+    val initialized = this.initializeBehavior(event.behavior, ctx)
+    this.updateBehaviorMap(event.aref, initialized)
+    this.actorEventBuffer.flush(event.aref.asInstanceOf[DActorRefImpl[Any]].isOptimistic)
+    this.actorEventBuffer.clear()
   }
 
-  private def handleDActorSendEvent(aref: DActorRef[Any], msg: Spore[Any], dCtx: DActorContextImpl): Unit = {
-    val behaviorOpt = this.dState.dMap.get(aref)
+  private def handleActorSend(event: DActorSend[Any], ctx: DActorContextImpl): Unit = {
+    val behaviorOpt = this.state.dMap.get(event.aref)
 
     if (behaviorOpt.isEmpty) {
-      return
+      return // message sent to an actor that does not exist is ignored
     }
 
     val behavior = behaviorOpt.get
 
     if (behavior.isInstanceOf[ReceiveBehavior[_]]) {
-      dCtx._self = aref.asInstanceOf[DActorRef[Any]]
-      dCtx._optimistic = behavior.isOptimistic
+      ctx._self = event.aref
 
-      val b = behavior.asInstanceOf[ReceiveBehavior[Any]]
-      val spore = b.fun
-      val nextBehavior = spore.unwrap().apply(using dCtx)(msg.unwrap())
-
-      this.handleUpdateBehaviorMap(aref, nextBehavior, dCtx)
+      val spore = behavior.asInstanceOf[ReceiveBehavior[Any]].fun
+      val nextBehavior = spore.unwrap().apply(using ctx)(event.msg.unwrap())
+      val initialized = nextBehavior match
+        case b @ InitBehavior(_, _) => this.initializeBehavior(b, ctx)
+        case b @ _                  => b
+      this.updateBehaviorMap(event.aref, initialized)
+      this.actorEventBuffer.flush(event.aref.asInstanceOf[DActorRefImpl[Any]].isOptimistic)
+      this.actorEventBuffer.clear()
     } //
     else if (behavior eq StoppedBehavior) {
       throw new Exception("Cannot receive event for StoppedBehavior.")
@@ -154,62 +155,85 @@ private[durable] class DActorRuntimeImpl(
     }
   }
 
-  private def handleEvent(e: DActorEvent, dCtx: DActorContextImpl): Unit = e match {
-    case DActorCreate(aref, behavior) =>
-      this.handleDActorCreateEvent(aref.asInstanceOf, behavior.asInstanceOf, dCtx)
-
-    case DActorSend(aref, msg) =>
-      this.handleDActorSendEvent(aref.asInstanceOf, msg, dCtx)
+  private def handleActorDelaySend(event: DActorDelaySend, ctx: DActorContextImpl): Unit = {
+    this.state.dDelayedQueue.enqueue(event)
   }
 
-  private def receiverIsOptimistic(e: DActorEvent): Boolean = e match {
-    case DActorCreate(_, behavior) =>
-      behavior.isOptimistic
+  private def handleActorLog(event: DActorLog, ctx: DActorContextImpl): Unit = {
+    this.state.dLog.append(event)
+  }
 
-    case DActorSend(aref, _) =>
-      dState.dMap.get(aref.asInstanceOf[DActorRef[Any]]) match
-        case Some(behavior) => behavior.isOptimistic
-        case None           => false // actor not found, treat as non-optimistic
+  private def safeHandleEvent(event: DActorEvent, ctx: DActorContextImpl): Unit = {
+    event match {
+      case e: DActorCreate[_] => this.handleActorSpawn(e.asInstanceOf, ctx)
+      case e: DActorSend[_]   => this.handleActorSend(e.asInstanceOf, ctx)
+      case e: DActorLog       => this.handleActorLog(e, ctx)
+      case e: DActorDelaySend => this.handleActorDelaySend(e, ctx)
+    }
+  }
+
+  private def receiverIsOptimistic(e: DActorEvent): Boolean = {
+    e match
+      case DActorCreate(aref, _)     => aref.asInstanceOf[DActorRefImpl[Any]].isOptimistic
+      case DActorSend(aref, _)       => aref.asInstanceOf[DActorRefImpl[Any]].isOptimistic
+      case DActorLog(_, _)           => true
+      case DActorDelaySend(_, event) => receiverIsOptimistic(event) // no infinite loop as `event` is always DActorSend
   }
 
   private def run[T](fileName: String, behavior: DActorBehavior[T]): Unit = {
     logger.info("Running...")
 
-    val dCtx = new DActorContextImpl(this)
+    val ctx = new DActorContextImpl(this)
 
     val batchSize = config.get("--batch-size").getOrElse(1024 * 16)
     val batchTime = config.get("--batch-time").getOrElse(100) // milliseconds
 
     // process
-    while (this.dState.dFastQueue.nonEmpty || this.dState.dSlowQueue.nonEmpty) {
+    while (this.state.dFastQueue.nonEmpty || this.state.dSlowQueue.nonEmpty || this.state.dDelayedQueue.nonEmpty) {
 
       logger.debug("...Running batch...")
 
       // Process slow queue
       var i = 0
-      val slowQueueSize = this.dState.dSlowQueue.size
+      val slowQueueSize = this.state.dSlowQueue.size
       var t0 = System.currentTimeMillis()
       while (i < slowQueueSize && i < batchSize && (System.currentTimeMillis() - t0) < batchTime) {
         i += 1
-        val e = this.dState.dSlowQueue.dequeue
-        handleEvent(e, dCtx)
+        val e = this.state.dSlowQueue.dequeue
+        this.safeHandleEvent(e, ctx)
       }
 
       // Process fast queue
       i = 0
       t0 = System.currentTimeMillis()
-      while (this.dState.dFastQueue.nonEmpty && i < batchSize && (System.currentTimeMillis() - t0) < batchTime) {
+      while (this.state.dFastQueue.nonEmpty && i < batchSize && (System.currentTimeMillis() - t0) < batchTime) {
         i += 1
-        val e = this.dState.dFastQueue.dequeue()
+        val e = this.state.dFastQueue.dequeue()
         if receiverIsOptimistic(e) then //
-          handleEvent(e, dCtx)
+          this.safeHandleEvent(e, ctx)
         else //
-          this.dState.dSlowQueue.enqueue(e)
+          this.state.dSlowQueue.enqueue(e)
+      }
+
+      // Process delay queue
+      i = 0
+      t0 = System.currentTimeMillis()
+      while (this.state.dDelayedQueue.nonEmpty && i < batchSize && (System.currentTimeMillis() - t0) < batchTime) {
+        i += 1
+        val e = this.state.dDelayedQueue.head
+        if e.until < System.currentTimeMillis() then //
+          if receiverIsOptimistic(e) then //
+            this.state.dFastQueue.append(e.sendEvent)
+          else //
+            this.state.dSlowQueue.append(e.sendEvent)
+          this.state.dDelayedQueue.dequeue()
+        else //
+          i = batchSize // no more events to process as `until` is >= currentTimeMillis()
       }
 
       logger.debug("...Batch finished")
       logger.debug("...Checkpointing batch...")
-      DFile.checkpoint(fileName, this.dState)
+      DFile.checkpoint(fileName, this.state)
       logger.debug("...Checkpoint finished")
     }
 

@@ -13,11 +13,14 @@ trait DActorRuntime {
     */
   def schedule[T](fileName: String)(behavior: DActorBehavior[T]): Unit
 
-  private[durable] def actorSend[U](aref: DActorRef[U], msg: U, fastTrack: Boolean)(using Spore[ReadWriter[U]]): Unit
+  private[durable] def actorSend[U](aref: DActorRef[U], msg: U)(using Spore[ReadWriter[U]]): Unit
 
-  private[durable] def actorSpawn[U](behavior: DActorBehavior[U], fastTrack: Boolean): DActorRef[U]
+  private[durable] def actorSpawn[U](behavior: DActorBehavior[U]): DActorRef[U]
 
   private[durable] def actorLog(msg: String): Unit
+
+  private[durable] def actorDelaySend[U](delay: Long, aref: DActorRef[U], msg: U)(using Spore[ReadWriter[U]]): Unit
+
 }
 
 object DActorRuntime {

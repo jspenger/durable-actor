@@ -37,15 +37,17 @@ package object durable {
   private[durable] given [T]: ReadWriter[DActorEvent] = macroRW
   private[durable] given [T]: ReadWriter[DActorSend[T]] = macroRW
   private[durable] given [T]: ReadWriter[DActorCreate[T]] = macroRW
-  private[durable] given [T]: ReadWriter[DActorLog] = macroRW
-
-  private[durable] given ReadWriter[DState] = macroRW
+  private[durable] given ReadWriter[DActorLog] = macroRW
+  private[durable] given ReadWriter[DActorDelaySend] = macroRW
 
   private[durable] object DActorBehaviorRW extends SporeBuilder[ReadWriter[DActorBehavior[?]]](macroRW)
   given dActorBehaviorRW[T]: Spore[ReadWriter[DActorBehavior[T]]] = DActorBehaviorRW.build().asInstanceOf
 
   private[durable] object DActorRefRW extends SporeBuilder[ReadWriter[DActorRef[?]]](macroRW)
   given dActorRefRW[T]: Spore[ReadWriter[DActorRef[T]]] = DActorRefRW.build().asInstanceOf
+
+  import durable.DState.given
+  private[durable] given ReadWriter[DState] = macroRW
 
   //////////////////////////////////////////////////////////////////////////////
   // Convenient syntactic extensions
