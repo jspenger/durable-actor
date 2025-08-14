@@ -35,12 +35,12 @@ object DActorBehaviors extends DActorBehaviorsJVM {
 
   private[durable] case class ReceiveBehavior[T](
       fun: Spore[DActorContext[T] ?=> T => DActorBehavior[T]],
-      isOptimistic: Boolean,
+      isOptimistic: Boolean = false,
   ) extends DActorBehavior[T]
 
   private[durable] case class InitBehavior[T](
       fun: Spore[DActorContext[T] ?=> DActorBehavior[T]],
-      isOptimistic: Boolean,
+      isOptimistic: Boolean = false,
   ) extends DActorBehavior[T]
 
   private[durable] case object SameBehavior extends DActorBehavior[Any] {
