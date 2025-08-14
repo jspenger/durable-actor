@@ -83,6 +83,16 @@ lazy val count = crossProject(JVMPlatform, JSPlatform, NativePlatform)
   .nativeSettings(nativeSettings)
   .dependsOn(root)
 
+lazy val countjvm = crossProject(JVMPlatform)
+  .in(file("durable-example"))
+  .settings(
+    name := "durable-example-countjvm",
+    commonSettings,
+    Compile / mainClass := Some("durable.example.CountJVM"),
+    target := baseDirectory.value / "target" / "countjvm",
+  )
+  .dependsOn(root)
+
 lazy val pingpong = crossProject(JVMPlatform, JSPlatform, NativePlatform)
   .in(file("durable-example"))
   .settings(
