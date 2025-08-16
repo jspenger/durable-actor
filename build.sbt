@@ -104,3 +104,13 @@ lazy val pingpong = crossProject(JVMPlatform, JSPlatform, NativePlatform)
   .jsSettings(jsSettings)
   .nativeSettings(nativeSettings)
   .dependsOn(root)
+
+lazy val pingpongjvm = crossProject(JVMPlatform)
+  .in(file("durable-example"))
+  .settings(
+    name := "durable-example-pingpongjvm",
+    commonSettings,
+    Compile / mainClass := Some("durable.example.PingPongJVM"),
+    target := baseDirectory.value / "target" / "pingpongjvm",
+  )
+  .dependsOn(root)
