@@ -9,17 +9,22 @@ import durable.platform.Path
 
 /** File system operations for the JS platform. */
 private[durable] object FileSystem {
-  lazy val fs = global.require("fs")
+  private lazy val fs = global.require("fs")
+  private lazy val process = global.require("process")
+
+  private final lazy val IS_WINDOWS = process.platform.asInstanceOf[String] == "win32"
 
   private def flush(path: Path, mode: String): Unit = {
-    val fd = fs.openSync(path.pathStr, mode)
-    try
-      fs.fsyncSync(fd)
-    finally
-      fs.closeSync(fd)
+    if (!IS_WINDOWS) {
+      val fd = fs.openSync(path.pathStr, mode)
+      try
+        fs.fsyncSync(fd)
+      finally
+        fs.closeSync(fd)
+    }
   }
 
-  val _path = js.Dynamic.global.require("path")
+  private val _path = js.Dynamic.global.require("path")
   private def parentOpt(path: Path): Option[Path] = {
     Option(
       Path(

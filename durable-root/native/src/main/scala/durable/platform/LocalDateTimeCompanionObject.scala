@@ -3,10 +3,9 @@ package durable.platform
 import scala.scalanative.unsafe.*
 import scala.scalanative.posix.time.*
 import scala.scalanative.posix.sys.time.*
-import scala.scalanative.runtime.Platform
+import scala.scalanative.meta.LinktimeInfo.isWindows
 
 private[durable] trait LocalDateTimeCompanionObject {
-  private final val IS_WINDOWS = Platform.isWindows()
 
   def now(): LocalDateTime = Zone {
 
@@ -14,7 +13,7 @@ private[durable] trait LocalDateTimeCompanionObject {
     val tm = stackalloc[tm]()
     val tt = stackalloc[time_t]()
 
-    if (!IS_WINDOWS) {
+    if (!isWindows) {
       clock_gettime(0, ts)
     } else {
       ts._1 = time(null)
@@ -23,7 +22,19 @@ private[durable] trait LocalDateTimeCompanionObject {
 
     !tt = ts._1
 
-    localtime_r(tt, tm)
+    if (!isWindows) {
+      localtime_r(tt, tm)
+    } else {
+      tm._1 = 0
+      tm._2 = 0
+      tm._3 = 0
+      tm._4 = 0
+      tm._5 = 0
+      tm._6 = 0
+      tm._7 = 0
+      tm._8 = 0
+      tm._9 = 0
+    }
 
     // format: off
     val year = tm._6 + 1900
