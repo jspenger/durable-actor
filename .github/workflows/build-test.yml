@@ -1,0 +1,73 @@
+name: Build and test
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            java: 8
+          - os: ubuntu-latest
+            java: 11
+          - os: ubuntu-latest
+            java: 17
+          - os: ubuntu-latest
+            java: 21
+          - os: macos-latest
+            java: 17
+          - os: windows-latest
+            java: 17
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    # TODO: Temporary fix for Windows (July 2025). See error message:
+    # error STL1000: Unexpected compiler version, expected Clang 19.0.0 or newer
+    - name: Setup Clang 19 (Windows only)
+      if: runner.os == 'Windows'
+      uses: egor-tensin/setup-clang@v1
+      with:
+        version: 19
+        platform: x64
+    - name: Setup JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: ${{ matrix.java }}
+        cache: sbt
+    - name: Setup sbt
+      uses: sbt/setup-sbt@v1
+    - name: Setup Spores3
+      run: |
+        git clone --branch v0.2.0 https://github.com/phaller/spores3.git
+        cd spores3
+        sbt publishLocal
+    - name: Build
+      run: |
+        sbt -v compile
+        sbt -v test:compile
+    - name: Doc
+      run: |
+        sbt -v doc
+    - name: Test
+      run: |
+        sbt -v test
+    - name: Example
+      run: |
+        sbt -v "fibonacciJVM    / runMain durable.example.Fibonacci"
+        sbt -v "countjvmJVM     / runMain durable.example.CountJVM"
+        sbt -v "pingpongjvmJVM  / runMain durable.example.PingPongJVM"
+        sbt -v "repeatJVM       / runMain durable.example.Repeat"
+        sbt -v "pingpongJVM     / runMain durable.example.PingPong"
+        sbt -v "countJVM        / runMain durable.example.Count"
+        sbt -v "pingpongJS      / run"
+        sbt -v "countJS         / run"
+        sbt -v "pingpongNative  / run"
+        sbt -v "countNative     / run"
+    - name: scalafmtCheck
+      run: |
+        sbt -v scalafmtCheckAll
+        sbt -v scalafmtSbtCheck
