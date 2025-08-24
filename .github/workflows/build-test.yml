@@ -68,6 +68,7 @@ jobs:
         sbt -v "pingpongNative  / run"
         sbt -v "countNative     / run"
     - name: scalafmtCheck
+      if: runner.os != 'Windows'
       run: |
         sbt -v scalafmtCheckAll
         sbt -v scalafmtSbtCheck
