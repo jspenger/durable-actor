@@ -12,7 +12,7 @@ import durable.DActorBehaviors.*
 
 object Repeat:
   case object NextRepeat derives ReadWriter:
-    given Spore[ReadWriter[NextRepeat.type]] = Spore.apply(summon)
+    given Spore[ReadWriter[NextRepeat.type]] = Spore.apply(summon[ReadWriter[NextRepeat.type]])
 
   def repeat(repeatEveryMillis: Long, untilMillis: Long): DActorBehavior[NextRepeat.type] =
     init:

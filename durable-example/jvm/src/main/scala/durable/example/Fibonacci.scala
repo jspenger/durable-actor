@@ -16,15 +16,15 @@ object Fibonacci:
 
   sealed trait FibMessage derives ReadWriter
   object FibMessage:
-    given Spore[ReadWriter[FibMessage]] = Spore.apply(summon)
+    given Spore[ReadWriter[FibMessage]] = Spore.apply(summon[ReadWriter[FibMessage]])
 
   case class Fib(n: Int, replyTo: DActorRef[FibResult]) extends FibMessage derives ReadWriter
   object Fib:
-    given Spore[ReadWriter[Fib]] = Spore.apply(summon)
+    given Spore[ReadWriter[Fib]] = Spore.apply(summon[ReadWriter[Fib]])
 
   case class FibResult(result: Int) extends FibMessage derives ReadWriter
   object FibResult:
-    given Spore[ReadWriter[FibResult]] = Spore.apply(summon)
+    given Spore[ReadWriter[FibResult]] = Spore.apply(summon[ReadWriter[FibResult]])
 
   //////////////////////////////////////////////////////////////////////////////
   // Durable actor behaviors
